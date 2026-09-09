@@ -78,6 +78,7 @@
     font-weight: 600;
   }
   .add-btn:active { transform: translateY(1px); }
+  .add-btn:disabled { opacity: 0.6; cursor: default; }
   ul {
     list-style: none;
     margin: 0;
@@ -163,7 +164,7 @@
 <body>
 <div class="app">
   <h1>🛒 쇼핑 리스트</h1>
-  <div class="sub">브라우저에 자동 저장됩니다</div>
+  <div class="sub" id="sub">Supabase 데이터베이스에 저장됩니다</div>
 
   <form class="add-row" id="addForm">
     <input type="text" id="itemInput" placeholder="아이템 추가..." autocomplete="off" maxlength="100">
@@ -178,28 +179,42 @@
   </div>
 </div>
 
-<script>
-  const STORAGE_KEY = "shopping-list-items";
+<script type="module">
+  import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
+
+  const SUPABASE_URL = "https://wnzaeouoatogztnxjdlv.supabase.co";
+  const SUPABASE_KEY = "sb_publishable_uY8pF28hlzyuBk7oOKQfQg_g1OnxZlD";
+  const TABLE = "shopping_items";
+
+  const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+
   const list = document.getElementById("list");
   const form = document.getElementById("addForm");
   const input = document.getElementById("itemInput");
   const count = document.getElementById("count");
   const clearChecked = document.getElementById("clearChecked");
+  const sub = document.getElementById("sub");
+  const addBtn = form.querySelector(".add-btn");
 
-  let items = load();
+  let items = [];
 
-  function load() {
-    try {
-      return JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
-    } catch {
-      return [];
-    }
+  function setStatus(msg, isError) {
+    sub.textContent = msg;
+    sub.style.color = isError ? "var(--danger)" : "var(--muted)";
   }
 
-  function save() {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
-    } catch {}
+  async function load() {
+    const { data, error } = await supabase
+      .from(TABLE)
+      .select("*")
+      .order("created_at", { ascending: true });
+    if (error) {
+      setStatus("불러오기 실패: " + error.message, true);
+      return;
+    }
+    items = data;
+    setStatus("Supabase 데이터베이스에 저장됩니다", false);
+    render();
   }
 
   function render() {
@@ -223,10 +238,19 @@
       checkbox.type = "checkbox";
       checkbox.className = "check";
       checkbox.checked = item.checked;
-      checkbox.addEventListener("change", () => {
-        item.checked = checkbox.checked;
-        save();
+      checkbox.addEventListener("change", async () => {
+        const next = checkbox.checked;
+        item.checked = next;
         render();
+        const { error } = await supabase
+          .from(TABLE)
+          .update({ checked: next })
+          .eq("id", item.id);
+        if (error) {
+          setStatus("저장 실패: " + error.message, true);
+          item.checked = !next;
+          render();
+        }
       });
 
       const label = document.createElement("span");
@@ -238,10 +262,16 @@
       del.className = "del-btn";
       del.textContent = "×";
       del.setAttribute("aria-label", "삭제");
-      del.addEventListener("click", () => {
+      del.addEventListener("click", async () => {
+        const prev = items;
         items = items.filter((i) => i.id !== item.id);
-        save();
         render();
+        const { error } = await supabase.from(TABLE).delete().eq("id", item.id);
+        if (error) {
+          setStatus("삭제 실패: " + error.message, true);
+          items = prev;
+          render();
+        }
       });
 
       li.append(checkbox, label, del);
@@ -254,23 +284,40 @@
       : `남은 항목 ${remaining}개 / 전체 ${items.length}개`;
   }
 
-  form.addEventListener("submit", (e) => {
+  form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const text = input.value.trim();
     if (!text) return;
-    items.push({ id: crypto.randomUUID(), text, checked: false });
     input.value = "";
-    save();
+    addBtn.disabled = true;
+    const { data, error } = await supabase
+      .from(TABLE)
+      .insert({ text })
+      .select()
+      .single();
+    addBtn.disabled = false;
+    if (error) {
+      setStatus("추가 실패: " + error.message, true);
+      input.value = text;
+      return;
+    }
+    items.push(data);
     render();
   });
 
-  clearChecked.addEventListener("click", () => {
+  clearChecked.addEventListener("click", async () => {
+    const prev = items;
     items = items.filter((i) => !i.checked);
-    save();
     render();
+    const { error } = await supabase.from(TABLE).delete().eq("checked", true);
+    if (error) {
+      setStatus("삭제 실패: " + error.message, true);
+      items = prev;
+      render();
+    }
   });
 
-  render();
+  load();
 </script>
 </body>
 </html>
